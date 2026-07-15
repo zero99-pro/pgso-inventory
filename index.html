@@ -68,18 +68,14 @@
         }
 
         .gov-logo-placeholder {
-            width: 80px;
-            height: 80px;
-            background: var(--primary-navy);
-            border: 3px solid var(--accent-gold);
-            border-radius: 50%;
-            margin: 0 auto 20px auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--accent-gold);
-            font-weight: bold;
-            font-size: 1.5rem;
+    width: 80px;
+    height: 80px;
+    background: transparent; /* Walang kulay sa background */
+    margin: 0 auto 20px auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
         }
 
         .login-card h1 {
@@ -195,6 +191,16 @@
             flex-grow: 1;
         }
 
+        .sidebar-category-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.4);
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin: 15px 0 5px 12px;
+            display: block;
+        }
+
         .sidebar-item {
             padding: 10px 12px;
             border-radius: var(--radius-sm);
@@ -213,7 +219,7 @@
             background: rgba(255, 255, 255, 0.1);
             color: #fff;
         }
-        .sidebar-item.active { border-left: 3px solid var(--accent-gold); }
+        .sidebar-item.active { border-left: 3px solid var(--accent-gold); padding-left: 9px; }
 
         .sidebar-footer {
             padding: 12px 15px;
@@ -651,14 +657,22 @@
         
         <aside id="app-sidebar">
             <div class="sidebar-header">
-                <div class="sidebar-logo">PGSO</div>
+                <img src="camsur_logo.png" alt="CamSur Logo" style="max-width: 20%; height: auto; display: block; margin: 100 auto;">
                 <div class="sidebar-title">            
                     <h1>CamSur PGSO</h1>
-                    <p>Inventory Division</p>
+                    <p>Inventory Section</Section></p>
                 </div>
             </div>
             <ul class="sidebar-menu">
-                <li class="sidebar-item active" onclick="switchTab('inventory')">Real-Time Inventory</li>
+                <!-- User requested buttons -->
+                <span class="sidebar-category-label">Equipment Assets</span>
+                <li class="sidebar-item active" onclick="switchTab('ledwall')">Ledwall</li>
+                <li class="sidebar-item" onclick="switchTab('mobile-disco')">Mobile Disco</li>
+                <li class="sidebar-item" onclick="switchTab('kaogma')">Kaogma/Concert</li>
+                
+                <span class="sidebar-category-label">Storage Locations</span>
+                <li class="sidebar-item" onclick="switchTab('warehouse-a')">Warehouse A</li>
+                <li class="sidebar-item" onclick="switchTab('warehouse-b')">Warehouse B</li>
             </ul>
             <div class="sidebar-footer">
                 <p>Secured Environment</p>
@@ -679,7 +693,7 @@
                     <img src="camsur_logo.png" alt="CamSur Logo" class="nav-logo" onclick="toggleSidebar(event)" style="height: 32px; width: auto; cursor: pointer;">
                     
                     <div class="header-title-area">
-                        <h2>Inventory System PGSO</h2>
+                        <h2 id="current-workspace-title">Ledwall Inventory</h2>
                         <p>Asset tracking, deduction monitoring, and validation tracking engine (Cloud Active)</p>
                     </div>
                 </div>
@@ -788,6 +802,8 @@
                             <option value="Office Supplies">
                             <option value="Furniture & Fixtures">
                             <option value="Machinery & Tools">
+                            <option value="AV Equipment">
+                            <option value="Stage/Event Gear">
                         </datalist>
                     </div>
                     <div class="form-group">
@@ -843,7 +859,7 @@
     <!-- FIREBASE SERVICES CORE SYSTEM INJECTOR -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         // Ginamit mo na ang iyong sariling cloud environment token!
         const firebaseConfig = {
@@ -858,14 +874,25 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-        const inventoryCol = collection(db, "inventory");
-
+        
         // --- GLOBAL LOGIN SYSTEM CREDENTIALS ---
         const DEMO_USER = "camsur";
         const DEMO_PASS = "pgso26";
 
         let inventoryState = [];
         let activeDeleteId = null;
+        let unsubscribe = null; // Para sa realtime listener
+
+        // Mapping ng tab IDs sa DB categories at Display Titles
+        const workspaceMap = {
+            'ledwall': { category: 'AV Equipment', title: 'Ledwall Inventory' },
+            'mobile-disco': { category: 'Sound System', title: 'Mobile Disco Inventory' },
+            'kaogma': { category: 'Stage/Event Gear', title: 'Kaogma/Concert Inventory' },
+            'warehouse-a': { category: 'WH-A', title: 'Warehouse A Assets' },
+            'warehouse-b': { category: 'WH-B', title: 'Warehouse B Assets' }
+        };
+
+        let currentActiveTab = 'ledwall';
 
         window.addEventListener('DOMContentLoaded', () => {
             initClock();
@@ -873,8 +900,31 @@
             setupKeyboardListeners();
             setupClickOutsideSidebar();
             
-            // REAL-TIME SYNCHRONIZER: Dito kumokonekta para sabay-sabay kayong magka-update sa screen
-            onSnapshot(inventoryCol, (snapshot) => {
+            // Simulan ang pakikinig sa default tab (Ledwall) kung naka-login
+            if (sessionStorage.getItem('pgso_authenticated') === 'true') {
+                loadWorkspace(currentActiveTab);
+            }
+        });
+
+        // --- CORE FUNCTION: Load Workspace based on Category ---
+        function loadWorkspace(tabId) {
+            currentActiveTab = tabId;
+            const config = workspaceMap[tabId];
+            
+            // I-update ang UI titles
+            document.getElementById('current-workspace-title').textContent = config.title;
+
+            // Kanselahin ang lumang listener kung meron
+            if (unsubscribe) unsubscribe();
+
+            const tbody = document.getElementById('inventory-table-body');
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:30px; color:var(--text-muted); font-weight:500;">Loading ${config.title} matrix...</td></tr>`;
+
+            // REAL-TIME SYNCHRONIZER: Naka-filter na base sa kategorya ng active tab
+            // *TANDAAN:* Maaaring kailanganin gumawa ng Index sa Firebase Console para sa query na ito.
+            const q = query(collection(db, "inventory"), where("category", "==", config.category));
+
+            unsubscribe = onSnapshot(q, (snapshot) => {
                 inventoryState = [];
                 snapshot.forEach((doc) => {
                     inventoryState.push({ id: doc.id, ...doc.data() });
@@ -882,9 +932,31 @@
                 renderInventoryTable();
             }, (error) => {
                 console.error("Firebase Sync Error: ", error);
-                showToast("Cloud connection error. Retrying...", "error");
+                if(error.code === 'failed-precondition') {
+                     showToast("Cloud index required. Please check console.", "error");
+                     tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:30px; color:var(--danger-red);">Database Error: Firestore Index required for this query.</td></tr>`;
+                } else {
+                     showToast("Cloud connection error.", "error");
+                }
             });
-        });
+        }
+
+        window.switchTab = function(tabId) {
+            // Update active state sa sidebar UI
+            const items = document.querySelectorAll('.sidebar-item');
+            items.forEach(el => el.classList.remove('active'));
+            
+            // Hanapin ang kaukulang li element
+            const clickedItem = event.currentTarget;
+            clickedItem.classList.add('active');
+
+            // I-load ang bagong data
+            loadWorkspace(tabId);
+            
+            // Isara ang sidebar sa mobile
+            document.getElementById('app-sidebar').classList.remove('sidebar-open');
+            showToast(`${workspaceMap[tabId].title} validated.`, "success");
+        }
 
         function initClock() {
             const updateClock = () => {
@@ -910,6 +982,7 @@
                 sessionStorage.setItem('pgso_authenticated', 'true');
                 sessionStorage.setItem('pgso_user', u);
                 checkSessionState();
+                loadWorkspace(currentActiveTab); // Load data matapos ang login
                 showToast("System session successfully authenticated.", "success");
             } else {
                 errorElement.classList.remove('hidden');
@@ -929,6 +1002,7 @@
             } else {
                 loginScreen.classList.remove('hidden');
                 appContainer.classList.add('hidden');
+                if (unsubscribe) unsubscribe(); // Ihinto ang listener kung logged out
             }
         }
 
@@ -1035,7 +1109,8 @@
             const recordsToRender = filteredData || inventoryState;
 
             if (recordsToRender.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:30px; color:var(--text-muted); font-weight:500;">No asset ledger matches found within active cloud engine scope.</td></tr>`;
+                const currentWH = workspaceMap[currentActiveTab].title;
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:30px; color:var(--text-muted); font-weight:500;">No asset ledger matches found within ${currentWH} cloud scope.</td></tr>`;
                 return;
             }
 
@@ -1092,8 +1167,12 @@
             document.getElementById('form-mode').value = mode;
             modal.classList.add('active');
 
+            // Auto-fill category base sa active tab kapag nagdadagdag
             if (mode === 'add') {
-                document.getElementById('modal-title').textContent = "Register New Operational Asset";
+                const currentWHConfig = workspaceMap[currentActiveTab];
+                document.getElementById('modal-title').textContent = `Register New Asset for ${currentWHConfig.title}`;
+                document.getElementById('asset-category').value = currentWHConfig.category;
+                
                 document.getElementById('initial-stock-group').classList.remove('hidden');
                 document.getElementById('readonly-meta-group').classList.add('hidden');
                 document.getElementById('asset-initial-stock').required = true;
@@ -1210,7 +1289,9 @@
                 return;
             }
 
+            const currentTitle = workspaceMap[currentActiveTab].title;
             let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += `Inventory Ledger: ${currentTitle}\n`;
             csvContent += "Property Number,Asset Name,Category,Maximum Stock,Current Stock,Deducted,Damage Units,Date Added\n";
 
             inventoryState.forEach(r => {
@@ -1222,7 +1303,7 @@
             const encodedUri = encodeURI(csvContent);
             const link = document.createElement("a");
             link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `PGSO_Inventory_Ledger_${new Date().toISOString().slice(0,10)}.csv`);
+            link.setAttribute("download", `${currentTitle.replace(/ /g,"_")}_${new Date().toISOString().slice(0,10)}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -1238,12 +1319,6 @@
             if(event) event.stopPropagation();
             const sidebar = document.getElementById('app-sidebar');
             sidebar.classList.toggle('sidebar-open');
-        }
-
-        window.switchTab = function(tabId) {
-            showToast("Inventory workspace validated.", "success");
-            const sidebar = document.getElementById('app-sidebar');
-            sidebar.classList.remove('sidebar-open');
         }
 
         function setupClickOutsideSidebar() {
